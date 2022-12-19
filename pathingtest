@@ -1,0 +1,316 @@
+// Constants to clarify which motors corresponds to which functions
+const int LEFT_DRIVE = motorA;
+const int RIGHT_DRIVE = motorD;
+const int INTAKE = motorB;
+const int INDEXER = motorC;
+
+// Constants for sensor naming purposes
+const int TOUCH = S3;
+const int GYRO = S2;
+const int COLOUR = S1;
+
+
+// Circle constants
+const int ENCODER_FACTOR = 4;
+const int DEGREES_CIRCLE = 360;
+
+// Reset the encoders with input string
+void resetEncoders(const string motors) {
+
+	if (motors == "all") {
+		nMotorEncoder(INTAKE) = 0;
+		nMotorEncoder(INDEXER) = 0;
+		nMotorEncoder(LEFT_DRIVE) = 0;
+		nMotorEncoder(RIGHT_DRIVE) = 0;
+
+		} else if (motors == "intake") {
+		nMotorEncoder(INTAKE) = 0;
+		} else if (motors == "drive") {
+		nMotorEncoder(LEFT_DRIVE) = 0;
+		nMotorEncoder(RIGHT_DRIVE) = 0;
+		} else if (motors == "indexer") {
+		nMotorEncoder(INDEXER) = 0;
+	}
+}
+
+
+void hardwareResetGyro(){
+	SensorMode[GYRO] = modeEV3Gyro_Rate;
+	wait1Msec(3500);
+	SensorMode[GYRO] = modeEV3Gyro_Angle;
+	wait1Msec(3500);
+	SensorMode[GYRO] = modeEV3Gyro_Calibration;
+	wait1Msec(500);
+}
+
+// TRIVIAL FUNCTIONS:
+// Calculate Distance
+float calculateDistance(int clicks) {
+	return (clicks * 2 * PI * ENCODER_FACTOR) / DEGREES_CIRCLE;
+}
+// Take average of both drive motor encoders
+float avgMotorEncoder(int clicksLeft, int clicksRight) {
+	return (-(clicksLeft + clicksRight) / 2);
+}
+
+void configureSensors() {
+	SensorType[COLOUR] = sensorEV3_Color;
+	SensorMode[COLOUR] = modeEV3Color_Color;
+
+	SensorType[GYRO] = sensorEV3_Gyro;
+	hardwareResetGyro();
+
+	SensorType[TOUCH] = sensorEV3_Touch;
+
+	nMotorEncoder[INDEXER]=0;
+	resetEncoders("all");
+
+}
+
+void setIntake(int power)
+{
+	motor[INTAKE]=-power;
+}
+
+void setLeftDrive(int powerMotor){
+	motor[LEFT_DRIVE] = -powerMotor;
+}
+
+
+void setRightDrive(int powerMotor){
+	motor[RIGHT_DRIVE] = -powerMotor;
+}
+
+// Trivial function to clip speeds based on specified range
+float rangeClip(float num, float bottom, float top) {
+	if (num>top){
+		return top;
+	}
+	else if (num<bottom){
+		return bottom;
+	}
+	else{
+		return num;
+	}
+}
+
+
+int getEggType()
+{
+	int x = getColorName(COLOUR);
+	if (x==0||x==1){
+		return 0;
+	}
+
+	else if (x==6){
+		return 1;
+	}
+	else{
+		return 2;
+	}
+}
+
+void moveIndexerWhite(bool toWhite){
+	int target;
+	if (toWhite){
+		target=0;
+	}
+	else{
+		target=180;
+	}
+
+	int error=10;
+	while (abs(error)>5){
+		error=target-nMotorEncoder(INDEXER);
+		if (error>0){
+			motor[INDEXER] = 15;
+		}
+		else{
+			motor[INDEXER] = -15;
+		}
+	}
+	motor[INDEXER] = 0;
+}
+
+
+void processBall(){
+	if (SensorValue[TOUCH] || getEggType()!=0){
+		setIntake(20);
+		motor[LEFT_DRIVE] = 0;
+		motor[RIGHT_DRIVE] = 0;
+		int egg=0;
+		time1[T1]=0;
+		while (egg==0){
+			egg=getEggType();
+
+			//5s timeout
+			if (time1[T1]>5000){
+				setIntake(-100);
+				wait1Msec(5000);
+				setIntake(100);
+				return;
+
+			}
+			//displayBigTextLine(1, "%d",SensorValue[TOUCH]);
+		}
+
+		setIntake(10);
+		time1[T1]=0;
+		int pastTime=0;
+		int whiteDetectionTime=0;
+		while (time1[T1]<2000){
+			//displayBigTextLine(1, "%d",getColorName(COLOUR));
+			egg=getEggType();
+			if (egg==1){
+				whiteDetectionTime+=time1[T1]-pastTime;
+			}
+			pastTime=time1[T1];
+		}
+
+		displayBigTextLine(1, "white: %d",whiteDetectionTime);
+
+		setIntake(0);
+		if (whiteDetectionTime>20){
+			displayBigTextLine(4, "White");
+			moveIndexerWhite(false);
+		}
+		else{
+			displayBigTextLine(4, "Other");
+			moveIndexerWhite(true);
+		}
+
+
+		setIntake(60);
+		wait1Msec(3000);
+		setIntake(100);
+	}
+}
+
+
+void driveDist(float length_to_drive, int initial_gyro){
+	resetEncoders("drive");
+
+	const float kp_linear = 1.5;
+	const float kp_turn = 0.06;
+
+	const float minPow = 10;
+	const float maxPow = 40;
+	const int tolerance=1;
+
+
+	float drivePower = 10;
+	float currentDist = avgMotorEncoder(nMotorEncoder(LEFT_DRIVE), nMotorEncoder(RIGHT_DRIVE));
+
+	float error = tolerance+1;
+	int gyro_error=0;
+	float turnCorrect;
+
+	while (error>tolerance) {
+		//processBall(); //check if we have a ball, if so process it
+
+		currentDist = avgMotorEncoder(nMotorEncoder(LEFT_DRIVE), nMotorEncoder(RIGHT_DRIVE));
+		error = length_to_drive - calculateDistance(currentDist);
+
+		drivePower = rangeClip(abs(kp_linear * error), minPow, maxPow);
+		if (error<0){
+			drivePower = - drivePower;
+		}
+
+		gyro_error = (getGyroDegrees(GYRO) - initial_gyro);
+		turnCorrect = rangeClip(abs(kp_turn * gyro_error), 0, 0.15);
+
+		if (gyro_error<0){
+			turnCorrect = - turnCorrect;
+		}
+
+		setLeftDrive(drivePower * (1.0-turnCorrect));
+		setRightDrive(drivePower * (1.0+turnCorrect));
+	}
+
+
+	setLeftDrive(0);
+	setRightDrive(0);
+
+}
+
+
+//Turning function (clockwise and counterclockwise)
+void turnAngle(float target_angle, int initial_gyro)
+{
+
+	const float turnPercent=1;
+	const int angle_turn_to = (initial_gyro + target_angle)*turnPercent;
+	const float KP_ADJUST = 0.8; // (max speed of turn)/(max deviation)
+	const int MAX_DEVIATION = 1;
+
+	int gyroAngle;
+
+	float gyro_error=angle_turn_to - getGyroDegrees(GYRO);
+
+	//As long as the gyro is not inline with the angle to turn
+	while (abs(gyro_error)>=MAX_DEVIATION) //applied a tolerance
+	{
+		gyroAngle=getGyroDegrees(GYRO);
+		gyro_error = angle_turn_to - getGyroDegrees(GYRO);
+		int motor_power = rangeClip(abs(KP_ADJUST * gyro_error), 13, 50);
+
+		if (gyro_error<0){
+			motor_power = -motor_power;
+		}
+
+
+		setLeftDrive(motor_power);
+		setRightDrive(-motor_power);
+	}
+
+	setLeftDrive(0);
+	setRightDrive(0);
+
+	wait1Msec(500);
+	gyro_error=angle_turn_to - getGyroDegrees(GYRO);
+
+	if (abs(gyro_error)<=MAX_DEVIATION){
+		return;
+	}
+	turnAngle(target_angle,initial_gyro);
+
+	setLeftDrive(0);
+	setRightDrive(0);
+
+}
+
+void Path()
+{
+	//Drive distance
+	driveDist(300,getGyroDegrees(GYRO));
+	//Turn 90 left
+	turnAngle(-90,getGyroDegrees(GYRO));
+	//Drive 5cm along the 70 cm width
+	driveDist(5,getGyroDegrees(GYRO));
+	//turn left 90
+	turnAngle(-90,getGyroDegrees(GYRO));
+	//drive along length
+	driveDist(300,getGyroDegrees(GYRO));
+	//turnright
+	turnAngle(90,getGyroDegrees(GYRO));
+	//drive distance
+	driveDist(5,getGyroDegrees(GYRO));
+	//turn angle
+	turnAngle(90,getGyroDegrees(GYRO));
+
+	//end of pathing the with of the intake
+}
+
+task main()
+{
+	configureSensors();
+	//driveDist(150,0);
+	//turnAngle(180,getGyroDegrees(GYRO));
+
+	//path through a 1m x 3m area with 50% overlap coverage
+	for(int i = 0; i<7; i++)
+		{
+			Path();
+		}
+	driveDist(300,0);
+}
